@@ -1,3 +1,5 @@
+#pragma once
+
 #include "opendbc/safety/declarations.h"
 
 bool get_longitudinal_allowed(void) {

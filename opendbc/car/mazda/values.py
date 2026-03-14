@@ -9,6 +9,7 @@ from opendbc.car.fw_query_definitions import FwQueryConfig, Request, StdQueries
 
 Ecu = CarParams.Ecu
 
+MAZDA_RADAR_ADDR = 0x764
 
 # Steer torque limits
 
@@ -17,6 +18,10 @@ class CarControllerParams:
   STEER_DRIVER_MULTIPLIER = 1     # weight driver torque
   STEER_DRIVER_FACTOR = 1         # from dbc
   STEER_STEP = 1  # 100 Hz
+
+  # Longitudinal (CRZ_INFO ACCEL_CMD in DBC units, ~0.001294 m/s^2 per unit)
+  ACCEL_MAX = 1545   # ~2.0 m/s^2
+  ACCEL_MIN = -2704  # ~-3.5 m/s^2
 
   def __init__(self, CP):
     if CP.carFingerprint == CAR.MAZDA_CX5_2022:
@@ -49,6 +54,7 @@ class MazdaFlags(IntFlag):
   # Static flags
   # Gen 1 hardware: same CAN messages and same camera
   GEN1 = 1
+  RADAR_DISABLED = 2  # Radar in programming session for openpilot longitudinal
 
 
 @dataclass

@@ -1,5 +1,48 @@
 from opendbc.car.mazda.values import Buttons, MazdaFlags
 
+# CRZ_CTRL mode template bytes (proven on-car by testkit)
+CRZ_CTRL_STANDBY = bytes.fromhex("02010b0000000000")
+CRZ_CTRL_ENGAGED_CRUISE = bytes.fromhex("0a018b2000001000")
+CRZ_CTRL_ENGAGED_FOLLOW = bytes.fromhex("0a018b4000001000")
+CRZ_CTRL_STOP_GO = bytes.fromhex("0a018b6000001000")
+CRZ_CTRL_MODE_BYTE_INDEXES = (0, 2, 3, 6)
+
+
+def create_crz_info(packer, accel_cmd, acc_active, ctr):
+  """Build CRZ_INFO (0x21B) — the main longitudinal command to the PCM.
+
+  accel_cmd: physical DBC value (ACCEL_CMD signal, offset -4096). 0 = no accel request.
+  acc_active: 1 when cruise actively controlling, 0 otherwise.
+  ctr: 8-bit rolling counter (mod 256).
+  """
+  values = {
+    "ACCEL_CMD": accel_cmd,
+    "ACC_ACTIVE": int(acc_active),
+    "ACC_SET_ALLOWED": 1,
+    "CTR1": ctr % 256,
+    "ERROR_STATUS": 0,
+    "CRZ_ENDED": 0,
+  }
+  msg = packer.make_can_msg("CRZ_INFO", 0, values)
+  # Fix checksum: inverted sum of bytes 0-6
+  dat = bytearray(msg[1])
+  dat[7] = (0xFF - (sum(dat[i] for i in range(7)) & 0xFF)) & 0xFF
+  return (msg[0], bytes(dat), msg[2])
+
+
+def create_crz_ctrl(template_bytes, raw_21c_base=None):
+  """Build CRZ_CTRL (0x21C) — the cruise state/mode gate message.
+
+  template_bytes: one of CRZ_CTRL_ENGAGED_CRUISE/FOLLOW/STOP_GO/STANDBY
+  raw_21c_base: optional base bytes to overlay mode onto (preserves non-mode bytes)
+  """
+  if raw_21c_base is not None:
+    dat = bytearray(raw_21c_base)
+    for i in CRZ_CTRL_MODE_BYTE_INDEXES:
+      dat[i] = template_bytes[i]
+    return (0x21C, bytes(dat), 0)
+  return (0x21C, template_bytes, 0)
+
 
 def create_steering_control(packer, CP, frame, apply_torque, lkas):
 
