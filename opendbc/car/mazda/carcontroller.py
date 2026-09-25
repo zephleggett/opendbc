@@ -71,11 +71,13 @@ class CarController(CarControllerBase):
           # Auto Hold lets go on RESUME_UNLATCHING
           resume = CC.longActive and not stopping and CS.brake_hold
           available = CS.out.cruiseState.available
+          # stock reads 3 behind a stopped lead and 2 while following
+          lead_distance = (3 if CS.out.standstill else 2) if CC.hudControl.leadVisible else 0
           for bus in (0, 2):
             can_sends.append(mazdacan.create_acc_command(self.packer, bus, self.frame // 2, self.accel, CC.enabled, available,
                                                          stopping and not CS.brake_hold, resume))
             can_sends.append(mazdacan.create_crz_ctrl(self.packer, bus, CC.enabled, available, CC.hudControl.leadDistanceBars,
-                                                      CS.brake_hold, CS.cam_laneinfo["BIT2"]))
+                                                      lead_distance, CS.brake_hold, CS.cam_laneinfo["BIT2"]))
 
         if self.frame % 10 == 0:
           can_sends.extend(mazdacan.create_radar_frames(2, self.frame // 10))

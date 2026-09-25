@@ -173,7 +173,7 @@ def create_acc_command(packer, bus, counter, accel, active, available, stopping,
   return packer.make_can_msg("CRZ_INFO", bus, values)
 
 
-def create_crz_ctrl(packer, bus, active, available, distance_bars, hold, high_beam):
+def create_crz_ctrl(packer, bus, active, available, distance_bars, lead_distance, hold, high_beam):
   values = {
     "MSG_1_INV": 1,
     "MSG_1_INV_COPY": 1,
@@ -181,6 +181,8 @@ def create_crz_ctrl(packer, bus, active, available, distance_bars, hold, high_be
     "CRZ_ACTIVE": active,
     "CRZ_AVAILABLE": available,
     "DISTANCE_SETTING": 5 - distance_bars if available else 0,  # 1 is the longest gap
+    "RADAR_HAS_LEAD": lead_distance > 0,
+    "RADAR_LEAD_RELATIVE_DISTANCE": lead_distance,
     "ACC_ACTIVE_2": active and not hold,
     "HIGH_BEAM_REQUEST": high_beam,  # relayed from the camera
   }
