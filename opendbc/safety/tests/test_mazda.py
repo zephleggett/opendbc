@@ -2,6 +2,7 @@
 import unittest
 
 from opendbc.car.structs import CarParams
+from opendbc.car.mazda.values import MazdaSafetyFlags
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerSafety, make_msg
@@ -79,6 +80,68 @@ class TestMazdaSafety(common.CarSafetyTest, common.DriverTorqueSteeringSafetyTes
     self.safety.set_controls_allowed(1)
     self.assertTrue(self._tx(self._button_msg(cancel=True)))
     self.assertTrue(self._tx(self._button_msg(resume=True)))
+
+
+class TestMazdaLongitudinalSafety(TestMazdaSafety, common.LongitudinalAccelSafetyTest):
+
+  TX_MSGS = [[0x243, 0], [0x09d, 0], [0x440, 0], [0x21b, 0], [0x21c, 0], [0x764, 0], [0x21b, 2], [0x21c, 2],
+             [0x361, 2], [0x362, 2], [0x363, 2], [0x364, 2], [0x365, 2], [0x366, 2], [0x499, 2]]
+
+  def setUp(self):
+    self.packer = CANPackerSafety("mazda_2017")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_safety_hooks(CarParams.SafetyModel.mazda, MazdaSafetyFlags.LONG)
+    self.safety.init_tests()
+
+  # the radar is silenced, so the cruise state comes from PEDALS
+  def _pcm_status_msg(self, enable):
+    values = {"ACC_ACTIVE": enable}
+    return self.packer.make_can_msg_safety("PEDALS", 0, values)
+
+  def _user_brake_msg(self, brake):
+    # since this message is used for engagement status, preserve current state
+    values = {"BRAKE_ON": brake, "ACC_ACTIVE": self.safety.get_controls_allowed()}
+    return self.packer.make_can_msg_safety("PEDALS", 0, values)
+
+  def _accel_msg(self, accel, bus=0, active=False, resume=False):
+    values = {"ACCEL_CMD": accel, "ACC_ACTIVE": active, "RESUME_UNLATCHING": resume}
+    return self.packer.make_can_msg_safety("CRZ_INFO", bus, values)
+
+  def _crz_ctrl_msg(self, active, bus=0):
+    values = {"CRZ_ACTIVE": active}
+    return self.packer.make_can_msg_safety("CRZ_CTRL", bus, values)
+
+  def test_radar_cruise_state_ignored(self):
+    for enable in (True, False):
+      self._rx(self._crz_ctrl_msg(enable))
+      self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_active_needs_controls_allowed(self):
+    for controls_allowed in (True, False):
+      self.safety.set_controls_allowed(controls_allowed)
+      for bus in (0, 2):
+        self.assertEqual(controls_allowed, self._tx(self._accel_msg(0, bus, active=True)))
+        self.assertEqual(controls_allowed, self._tx(self._accel_msg(0, bus, resume=True)))
+        self.assertEqual(controls_allowed, self._tx(self._crz_ctrl_msg(True, bus)))
+        self.assertTrue(self._tx(self._accel_msg(0, bus)))
+        self.assertTrue(self._tx(self._crz_ctrl_msg(False, bus)))
+
+  def test_standby_accel(self):
+    for controls_allowed in (True, False):
+      self.safety.set_controls_allowed(controls_allowed)
+      for bus in (0, 2):
+        self.assertTrue(self._tx(self._accel_msg(4.094, bus)))
+        self.assertFalse(self._tx(self._accel_msg(4.094, bus, active=True)))
+        self.assertFalse(self._tx(self._accel_msg(4.093, bus)))
+
+  def test_diagnostics(self):
+    for moving in (False, True):
+      self._rx(self._speed_msg(1 if moving else 0))
+      for should_tx, dat in ((True, b"\x02\x3E\x80\x00\x00\x00\x00\x00"),  # tester present
+                             (not moving, b"\x02\x10\x02\x00\x00\x00\x00\x00"),  # programming session
+                             (False, b"\x02\x10\x01\x00\x00\x00\x00\x00"),
+                             (False, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")):
+        self.assertEqual(should_tx, self._tx(libsafety_py.make_CANPacket(0x764, 0, dat)))
 
 
 class TestMazdaIgnition(unittest.TestCase):
