@@ -4,7 +4,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.mazda.carcontroller import CarController
 from opendbc.car.mazda.carstate import CarState
-from opendbc.car.mazda.values import CAR, LKAS_LIMITS
+from opendbc.car.mazda.values import CAR, LKAS_LIMITS, MazdaSafetyFlags
 
 
 class CarInterface(CarInterfaceBase):
@@ -28,5 +28,13 @@ class CarInterface(CarInterfaceBase):
       ret.minSteerSpeed = LKAS_LIMITS.DISABLE_SPEED * CV.KPH_TO_MS
 
     ret.centerToFront = ret.wheelbase * 0.41
+
+    ret.alphaLongitudinalAvailable = candidate == CAR.MAZDA_CX5_2022
+    ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
+    if ret.openpilotLongitudinalControl:
+      ret.safetyConfigs[0].safetyParam |= MazdaSafetyFlags.LONG.value
+
+    ret.stopAccel = -1.024  # stock at a standstill
+    ret.longitudinalActuatorDelay = 0.36
 
     return ret

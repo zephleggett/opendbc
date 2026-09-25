@@ -1,11 +1,14 @@
+import numpy as np
+
 from opendbc.can import CANPacker
-from opendbc.car import Bus, structs
+from opendbc.car import Bus, make_tester_present_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.mazda import mazdacan
 from opendbc.car.mazda.values import CarControllerParams, Buttons
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
+LongCtrlState = structs.CarControl.Actuators.LongControlState
 
 
 class CarController(CarControllerBase):
@@ -14,6 +17,7 @@ class CarController(CarControllerBase):
     self.apply_torque_last = 0
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.brake_counter = 0
+    self.accel = 0.
 
   def update(self, CC, CS, now_nanos):
     can_sends = []
@@ -45,6 +49,37 @@ class CarController(CarControllerBase):
 
     self.apply_torque_last = apply_torque
 
+    if self.CP.openpilotLongitudinalControl:
+      # the radar is silent in a programming session and stays there while it hears tester present
+      if self.frame % 50 == 0:
+        if CS.radar_disabled:
+          can_sends.append(make_tester_present_msg(mazdacan.RADAR_ADDR, 0, suppress_response=True))
+        elif CS.radar_request:
+          can_sends.append(mazdacan.create_radar_session_request(0))
+
+      # the camera faults without the radar's messages, and the panda doesn't forward ours to it
+      if CS.radar_disabled and not CS.out.accFaulted:
+        if self.frame % 2 == 0:
+          self.accel = 0.
+          if CC.longActive:
+            self.accel = float(np.clip(CC.actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+            # the radar relaxes its command once Auto Hold holds the car
+            if CS.brake_hold:
+              self.accel = -0.001
+
+          stopping = CC.actuators.longControlState == LongCtrlState.stopping
+          # Auto Hold lets go on RESUME_UNLATCHING
+          resume = CC.longActive and not stopping and CS.brake_hold
+          available = CS.out.cruiseState.available
+          for bus in (0, 2):
+            can_sends.append(mazdacan.create_acc_command(self.packer, bus, self.frame // 2, self.accel, CC.enabled, available,
+                                                         stopping and not CS.brake_hold, resume))
+            can_sends.append(mazdacan.create_crz_ctrl(self.packer, bus, CC.enabled, available, CC.hudControl.leadDistanceBars,
+                                                      CS.brake_hold, CS.cam_laneinfo["BIT2"]))
+
+        if self.frame % 10 == 0:
+          can_sends.extend(mazdacan.create_radar_frames(2, self.frame // 10))
+
     # send HUD alerts
     if self.frame % 50 == 0:
       ldw = CC.hudControl.visualAlert == VisualAlert.ldw
@@ -60,6 +95,8 @@ class CarController(CarControllerBase):
     new_actuators = CC.actuators.as_builder()
     new_actuators.torque = apply_torque / CarControllerParams.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
+    if self.CP.openpilotLongitudinalControl:
+      new_actuators.accel = self.accel
 
     self.frame += 1
     return new_actuators, can_sends

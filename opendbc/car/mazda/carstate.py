@@ -1,10 +1,14 @@
 from opendbc.can import CANDefine, CANParser
-from opendbc.car import Bus, create_button_events, structs
+from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.mazda.values import DBC, LKAS_LIMITS
 
 ButtonType = structs.CarState.ButtonEvent.Type
+
+# the camera checks for the radar after it boots, silencing the radar before then latches a camera fault
+CAMERA_BOOT_FRAMES = int(10. / DT_CTRL)
+RADAR_SILENT_FRAMES = int(0.05 / DT_CTRL)  # CRZ_INFO is 50 Hz
 
 
 class CarState(CarStateBase):
@@ -17,6 +21,12 @@ class CarState(CarStateBase):
     self.crz_btns_counter = 0
     self.acc_active_last = False
     self.lkas_allowed_speed = False
+    self.brake_hold = False
+
+    self.camera_boot_frames = 0
+    self.radar_silent_frames = 0
+    self.radar_request = False
+    self.radar_disabled = False
 
     self.distance_button = 0
     self.accel_button = 0
@@ -77,11 +87,27 @@ class CarState(CarStateBase):
     else:
       self.lkas_allowed_speed = True
 
-    # TODO: the signal used for available seems to be the adaptive cruise signal, instead of the main on
-    #       it should be used for carState.cruiseState.nonAdaptive instead
-    ret.cruiseState.available = cp.vl["CRZ_CTRL"]["CRZ_AVAILABLE"] == 1
-    ret.cruiseState.enabled = cp.vl["CRZ_CTRL"]["CRZ_ACTIVE"] == 1
-    ret.cruiseState.standstill = cp.vl["PEDALS"]["STANDSTILL"] == 1
+    if self.CP.openpilotLongitudinalControl:
+      # the radar is silenced, so the cruise state comes from the body. ACC_OFF is set while cruise is on but not engaged
+      ret.cruiseState.available = cp.vl["PEDALS"]["ACC_OFF"] == 1 or cp.vl["PEDALS"]["ACC_ACTIVE"] == 1
+      ret.cruiseState.enabled = cp.vl["PEDALS"]["ACC_ACTIVE"] == 1
+      self.brake_hold = cp.vl["GEAR"]["BRAKE_HOLD"] == 1
+
+      # NO_ERR_BIT clears once the camera has booted
+      self.camera_boot_frames = 0 if cp_cam.vl["CAM_LANEINFO"]["NO_ERR_BIT"] else self.camera_boot_frames + 1
+      self.radar_silent_frames = 0 if len(cp.vl_all["CRZ_INFO"]["CHKSUM"]) else self.radar_silent_frames + 1
+
+      # silence the radar at a standstill and never from under stock cruise
+      self.radar_request = self.camera_boot_frames > CAMERA_BOOT_FRAMES and ret.standstill and not ret.cruiseState.enabled
+      self.radar_disabled |= self.radar_request and self.radar_silent_frames > RADAR_SILENT_FRAMES
+      ret.carNotReady = not self.radar_disabled
+      ret.accFaulted = self.radar_disabled and self.radar_silent_frames <= RADAR_SILENT_FRAMES
+    else:
+      # TODO: the signal used for available seems to be the adaptive cruise signal, instead of the main on
+      #       it should be used for carState.cruiseState.nonAdaptive instead
+      ret.cruiseState.available = cp.vl["CRZ_CTRL"]["CRZ_AVAILABLE"] == 1
+      ret.cruiseState.enabled = cp.vl["CRZ_CTRL"]["CRZ_ACTIVE"] == 1
+      ret.cruiseState.standstill = cp.vl["PEDALS"]["STANDSTILL"] == 1
     ret.cruiseState.speed = cp.vl["CRZ_EVENTS"]["CRZ_SPEED"] * CV.KPH_TO_MS
 
     # stock lkas should be on
@@ -127,7 +153,11 @@ class CarState(CarStateBase):
 
   @staticmethod
   def get_can_parsers(CP):
+    pt_messages = []
+    if CP.openpilotLongitudinalControl:
+      pt_messages.append(("CRZ_INFO", float("nan")))
+
     return {
-      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 0),
+      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
     }

@@ -21,6 +21,9 @@ class CarControllerParams:
   STEER_DRIVER_FACTOR = 1         # from dbc
   STEER_STEP = 1  # 100 Hz
 
+  ACCEL_MAX = 2.0  # m/s^2
+  ACCEL_MIN = -3.5  # m/s^2
+
   def __init__(self, CP):
     pass
 

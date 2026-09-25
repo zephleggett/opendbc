@@ -1,4 +1,19 @@
+from opendbc.car import uds
+from opendbc.car.can_definitions import CanData
 from opendbc.car.mazda.values import Buttons, MazdaFlags
+
+RADAR_ADDR = 0x764
+
+# the radar with no objects in view, only the counter in the last nibble of the tracks changes
+RADAR_STATIC = bytes.fromhex("0008c00000000000")
+RADAR_TRACKS = {
+  0x361: bytes.fromhex("fff7fefe1fc00080"),
+  0x362: bytes.fromhex("fff7fefe1fc78c80"),
+  0x363: bytes.fromhex("fff7fefe1fc00000"),
+  0x364: bytes.fromhex("fff7fefe1fc00000"),
+  0x365: bytes.fromhex("fff7fe7ffbff3fc0"),
+  0x366: bytes.fromhex("fff7fe7ffbff3fc0"),
+}
 
 
 def create_steering_control(packer, CP, frame, apply_torque, lkas):
@@ -126,3 +141,47 @@ def create_button_cmd(packer, CP, counter, button):
     }
 
     return packer.make_can_msg("CRZ_BTNS", 0, values)
+
+
+def create_radar_session_request(bus):
+  return CanData(RADAR_ADDR, bytes([0x02, uds.SERVICE_TYPE.DIAGNOSTIC_SESSION_CONTROL, uds.SESSION_TYPE.PROGRAMMING, 0, 0, 0, 0, 0]), bus)
+
+
+def create_radar_frames(bus, counter):
+  msgs = [CanData(0x499, RADAR_STATIC, bus)]
+  for addr, dat in RADAR_TRACKS.items():
+    msgs.append(CanData(addr, dat[:7] + bytes([dat[7] | (counter % 16)]), bus))
+  return msgs
+
+
+def create_acc_command(packer, bus, counter, accel, active, available, stopping, resume):
+  values = {
+    "ERROR_STATUS": 1,
+    "STATIC_1": 0x7ff,
+    "CTR": counter % 16,
+    "ACCEL_CMD": accel if active else 4.094,  # pegged while not engaged
+    "ACC_ACTIVE": active,
+    "ACC_SET_ALLOWED": available,
+    "CRZ_AVAILABLE": available,
+    "STOPPING": stopping,
+    "STOPPING_2": stopping,
+    "RESUME_UNLATCHING": resume,
+  }
+  dat = packer.make_can_msg("CRZ_INFO", bus, values)[1]
+  # inverted sum of the first seven bytes, leaving out STOPPING and RESUME_UNLATCHING
+  values["CHKSUM"] = (0xFF - sum(dat[:7]) + (dat[5] & 0x04) + (dat[6] & 0x40)) & 0xFF
+  return packer.make_can_msg("CRZ_INFO", bus, values)
+
+
+def create_crz_ctrl(packer, bus, active, available, distance_bars, hold, high_beam):
+  values = {
+    "MSG_1_INV": 1,
+    "MSG_1_INV_COPY": 1,
+    "NEW_SIGNAL_8": 1,
+    "CRZ_ACTIVE": active,
+    "CRZ_AVAILABLE": available,
+    "DISTANCE_SETTING": 5 - distance_bars if available else 0,  # 1 is the longest gap
+    "ACC_ACTIVE_2": active and not hold,
+    "HIGH_BEAM_REQUEST": high_beam,  # relayed from the camera
+  }
+  return packer.make_can_msg("CRZ_CTRL", bus, values)
